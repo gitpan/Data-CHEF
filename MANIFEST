@@ -1,5 +1,6 @@
-CHEF.pm
 Changes
-MANIFEST
+CHEF.pm
 Makefile.PL
-test.pl
+MANIFEST
+README
+t/1.t

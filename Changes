@@ -1,5 +1,8 @@
 Revision history for Perl extension Data::CHEF.
 
-0.01  Sun Nov 18 17:32:12 2001
-	- original version; created by h2xs 1.19
+1.01  Sun Oct  6 11:26:25 2002
+	Added support for hash keys
+	Added support for whitespace in multiline values
 
+0.99  Sun Nov 18 17:32:12 2001
+	First release

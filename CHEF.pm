@@ -20,7 +20,7 @@ use strict;
 
 use vars qw/$VERSION /;
 
-$VERSION=0.99;
+$VERSION=1.01;
 
 #
 # Constructor Method
@@ -28,10 +28,11 @@ $VERSION=0.99;
 
 sub new
 {
-my ($class)=@_;
+my ($proto)=shift;
+my ($class)=ref($proto) || $proto;
 my ($object)={};
 bless ($object,$class);
-$object->_init();
+$object->_init(@_);
 return($object);
 }
 
@@ -54,36 +55,57 @@ while (@input)
 	if ($line =~/==/)
 	{
 		($key,$value)=split(/==/,$line);
-		#chop($value);
-		if (@stack)
+		$key=_checkKey($key);
+		if ($key)
 		{
-			$key=$stack[$#stack].".".$key;
-		}
-		if ($self->{data}->{$key})
-		{
-			$self->{data}->{$key}.=$value
-		} else {
-			$self->{data}->{$key}=$value;
+			if (@stack)
+			{
+				$key=$stack[$#stack].".".$key;
+			}
+			if ($self->{data}->{$key})
+			{
+				$self->{data}->{$key}.=$value
+			} else {
+				$self->{data}->{$key}=$value;
+			}
 		}
 	} elsif ($line=~/=>/)
 	{
 		($key,$eoi)=split(/=>/,$line);
-		if (@stack)
+		$key=_checkKey($key);
+		my ($bar);
+		if ($eoi =~/^\|/)
 		{
-			$key=$stack[$#stack].".".$key;
+			$eoi=~s/^\|//;
+			$bar=1;
 		}
-		$value="";
-		while($subline=shift(@input))
+		if ($key)
 		{
-			$subline=~s/^\s+//;
-			last if ($subline eq $eoi);
-			$value.=$subline."\n";
-		}
-		if ($self->{data}->{$key})
-		{
-			$self->{data}->{$key}.=$value
-		} else {
-			$self->{data}->{$key}=$value;
+			if (@stack)
+			{
+				$key=$stack[$#stack].".".$key;
+			}
+			$value="";
+			while($subline=shift(@input))
+			{
+				$subline=~s/^\s+//;
+				if ($bar)
+				{
+					$subline=~s/^\|//;
+				}
+				if ($subline eq $eoi)
+				{
+					$bar=0;
+					last;
+				}
+				$value.=$subline."\n";
+			}
+			if ($self->{data}->{$key})
+			{
+				$self->{data}->{$key}.=$value
+			} else {
+				$self->{data}->{$key}=$value;
+			}
 		}
 	} elsif ($line=~/=\{/)
 	{
@@ -107,7 +129,7 @@ sub readHash
 my ($self)=shift;
 my (%hash)=@_;
 my ($k);
-foreach $k (keys(%hash))
+foreach $k (CORE::keys(%hash))
 {
 	$self->{data}->{$k}=$hash{$k};
 }
@@ -138,7 +160,7 @@ return($output);
 sub keys
 {
 my ($self)=shift;
-return(sort(keys(%{$self->{data}})));
+return(sort(CORE::keys(%{$self->{data}})));
 }
 
 sub get
@@ -165,8 +187,12 @@ my ($key,$value,$reindex);
 while (@_)
 {
 	($key,$value)=splice(@_,0,2);
-	$reindex=1 unless ($self->{data}->{$key});
-	$self->{data}->{$key}=$value;
+	$key=_checkKey($key);
+	if ($key)
+	{
+		$reindex=1 unless ($self->{data}->{$key});
+		$self->{data}->{$key}=$value;
+	}
 }
 if ($reindex)
 {
@@ -185,11 +211,11 @@ sub copy
 {
 my ($self)=shift;
 my ($subkey)=shift;
-my (@list,$shop);
+my (@list,$chef);
 (@list)=$self->_childKeys($subkey);
-$shop=ref($self)->new();
-$shop->readHash($self->get(@list));
-return($shop);
+$chef=$self->new();
+$chef->readHash($self->get(@list));
+return($chef);
 }
 
 sub spawn
@@ -217,26 +243,47 @@ foreach $key (@list)
 {
 	$new=_chopKey($key,$subkey);
 	($test,$rest)=split(/\./,$new,2);
-	print("DEBUG2: $new ** $test ** $rest\n");
 	if ($test =~ /\((\d+)\)/)
 	{
 		$index=$1;
 		unless ($array[$index])
 		{
 			print("Creating index $index\n");
-			$array[$index]=ref($self)->new();
+			$array[$index]=$self->new();
 			$array[$index]->set("_array.index",$index);
 		}
 		$array[$index]->set($rest,$self->get($key));
-		print("DEBUG:",$rest,"--",$array[$index]->get($rest),"\n");
 	}
 }
-print("DEBUG3:",@array,"\n","IREF:",ref($array[1]),"\n");
 foreach $element (@array)
 {
 	push(@processed,$element) if (ref($element));
 }
 return(@processed);
+}
+
+sub spawnHash
+{
+my ($self)=shift;
+my ($subkey)=shift;
+my ($key,$new,$test,$rest,$hkey,@list,%hash);
+(@list)=$self->_childKeys($subkey);
+foreach $key (@list)
+{
+	$new=_chopKey($key,$subkey);
+	($test,$rest)=split(/\./,$new,2);
+	if ($test =~ /\[(\w+)\]/)
+	{
+		$hkey=$1;
+		unless ($hash{$hkey})
+		{
+			$hash{$hkey}=$self->new();
+			$hash{$hkey}->set("_array.hash",$hkey);
+		}
+		$hash{$hkey}->set($rest,$self->get($key));
+	}
+}
+return (%hash);
 }
 
 sub current
@@ -277,16 +324,23 @@ my ($self)=shift;
 return;
 }
 
+#
+# Initialize the data pointer to zero
+# Recalculate the maximum size of the ptr
 sub _index
 {
 my ($self)=shift;
 my (@keys);
-(@keys)=sort(keys(%{$self->{data}}));
+(@keys)=sort(CORE::keys(%{$self->{data}}));
 $self->{index}=[ @keys ];
 $self->{ptr}=0;
 return;
 }
 
+#
+# Create a random end of input string
+# for writing multiline values
+# double check to make sure marker isn't identical to value
 sub _randEOI
 {
 my ($self)=shift;
@@ -308,6 +362,21 @@ do {
 	}
 } until ($eoi ne $value);
 return($eoi);
+}
+
+#
+# Check the key to make sure it's valid
+sub _checkKey
+{
+my ($key)=shift;
+$key=lc($key);
+if ($key=~/^([\w\-]+|\(\d+\)|\[[\w\-]+\])(\.([\w\-]+|\(\d+\)|\[[\w\-]+\]))*$/)
+{
+	return $key;
+} else {
+	print("Invalid key ($key)\n");
+	return undef;
+}
 }
 
 sub _childKeys
@@ -337,6 +406,29 @@ return($child);
 }
 
 #
+# Special version of set
+# Allows uppercase characters in keys
+sub _set
+{
+my ($self)=shift;
+my ($key,$value,$reindex);
+while (@_)
+{
+        ($key,$value)=splice(@_,0,2);
+        if ($key)
+        {
+                $reindex=1 unless ($self->{data}->{$key});
+                $self->{data}->{$key}=$value;
+        }
+}
+if ($reindex)
+{
+        $self->_index();
+}
+return;
+}
+
+#
 # Exit Block
 #
 1;
@@ -349,7 +441,7 @@ __END__
 
 =head1 NAME
 
-Data::CHEF Complex Hash Export Format
+Data::CHEF - Complex Hash Exchange Format
 
 =head1 SYNOPSIS
 
@@ -357,15 +449,15 @@ SYNOPSIS
 
 use Data::CHEF;
 
-$shop=Data::CHEF->new();
+$chef=Data::CHEF->new();
 
-$shop->read(@text_array);
+$chef->read(@text_array);
 
-$shop->readHash(%hash_table);
+$chef->readHash(%hash_table);
 
-$shop->set("name.first" => "John Public");
+$chef->set("name.full" => "John Public");
 
-$shop->get("name.first", "name.last");
+$chef->get("name.first", "name.last");
 
 =head1 DESCRIPTION
 
@@ -385,12 +477,20 @@ A simple key/value record is expressed like this:
 
 A key/value pair where the value spans multiple lines can be expressed like this:
 
- [key]=>END_TAG
+ [key]=>END-TAG
  [value]
  [value]
- END_TAG
+ END-TAG
 
-Whitespace at the start of a line is ignored.
+Whitespace at the start of a line is ignored.  If you have a multiple line 
+value that includes whitespace at the beginning of a line, you can use 
+the vertical bar to indicate that it is to be preserved.
+
+ [key]=>|END-TAG
+ |    [value]
+ | [value]
+ |     [value]
+ END-TAG
 
 The keys in the CHEF format can be hierarchial, with levels of the hierarchy 
 seperated by periods.
@@ -411,8 +511,8 @@ Here is the above example compressed:
    last==Josephes
  }
 
-A key segment is capable of being an array index.  This is useful for serializing 
-data, or if you are dealing with multiple records of identical data.  This 
+A key segment is capable of being an array index.  This is useful for 
+serializing data, or if you are dealing with lists of identical records.
 
 The following is an example of array indexes being used in a CHEF file that 
 contains data about a Compact Disc.
@@ -433,6 +533,29 @@ contains data about a Compact Disc.
  < ..... >
  }
 
+You can create an array of CHEF objects by using the spawnArray() 
+method.
+
+A key segment can also be a hash index.
+
+ system={
+ 	[ps2]={
+ 		name==Playstation 2
+ 		manufacturer==Sony
+ 	}
+	[gamecube]={
+ 		name==Gamecube
+ 		manufacturer==Nintendo
+ 	}
+	[xbox]={
+ 		name==X-Box
+ 		manufacturer==Microsoft
+ 	}
+ }
+
+You can create a hash table of CHEF objects by using the 
+spawnHash() method.
+
 =head1 USING THE CHEF FORMAT 
 
 Comments in a chef file can be indicated with a pound sign at the start
@@ -445,114 +568,127 @@ value.
 If you're sending CHEF data in a MIME encapsulated document, use the 
 MIME type "x-application/x-chef".
 
-=head1 EXAMPLE RECORD
-
-Here is an example record that uses every aspect of the CHEF format:
-
-
- # This is all data on John Q Public
- name.first==John
- name.last==Public
- loc={
-        address=>EOA_MARKER
-        1313 Mockingbird Lane
-        Apartment 5
-        EOA_MARKER
-        state==Minnesota
-        locality==Young America
-        zip==55555
- }
- phone={
-         (1)={    
-                 number==320.555.1212
-                 label==Home
-         }
-         (2)={
-                 number==320.555.2121
-                 label==Work
-         }
- }                 
- inet={           
-         email.(1).address==jqp@ci.young-america.mn.us
- }
-
-For convenience, all code examples below are based on this example input.
-
 =head1 METHODS
 
 =over 4 
 
-=item $shop=Data::CHEF->new();
+=item $chef=Data::CHEF->new();
 
 Create a new CHEF object
 
-=item $shop->read(@text_array);
+=item $chef->read(@text_array);
 
 Read in text from an array to populate the internal data structure
 
-=item $shop->readHash(%hash_table);
+=item $chef->readHash(%hash_table);
 
 Read in a hash table using the same keys and values to populate the data structure
 
-=item $string=$shop->write();
+=item $string=$chef->write();
 
 Send the structure out as a single stream that can be written to a file
 
-=item $shop->keys();
+=item $chef->keys();
 
 Return an array of all keys in the structure
 
-=item $shop->dump();
+=item $chef->dump();
 
 Return a hash of all keys and values in the structure
 
-=item $shop->get(@key_list);
+=item $chef->get(@key_list);
 
 Return the value for a specific key.  If 1 key is specified, that key value 
 is returned.  If multiple keys are specified, the requested keys AND values are 
 returned as a hash.
 
-=item $shop->set(%hash);
+=item $chef->set(%hash);
 
 Set specific keys and values in the structure
 
-=item $shop->current();
+=item $chef->current();
 
 Return the current key and value where the index pointer is
 
-=item $shop->next();
+=item $chef->next();
 
 Move the index pointer up one key
 
-=item $shop->prev();
+=item $chef->prev();
 
 Move the index pointer back one key
 
-=item $shop->copy($base_key)
+=item $chef->copy($base_key)
 
 Creates a new CHEF object with keys that match the base_key.  For instance, 
 with the example above and a $base_key of "name", it would create a CHEF 
 object with only 2 keys/values: name.first and name.last
 
-=item $shop->spawn($base_key);
+ STARTING DATA
+
+ name.first==John
+ name.last==Public
+
+ COPIED OBJECT ($new)=$chef->copy("name");
+
+ name.first==John
+ name.last==Public
+
+=item $chef->spawn($base_key);
 
 Creates a new CHEF object with keys like copy, but removes the base_key portion 
 of the names in the new keys.  For instance, with a $base_key of "loc" with the 
 same example, a new CHEF object would be created with 4 key/value pairs: 
 address, state, locality, zip.
 
-=item $shop->spawnArray($base_key);
+ STARTING DATA
 
-Creates an array of CHEF objects when the base key points to an array structure.  
-If $base_key was "phone", an array of CHEF objects would be returned, each one 
-containing the keys: number and label.
+ name.first==John
+ name.last==Public
+
+ SPAWNED OBJECT ($new)=$chef->spawn("name");
+
+ first==John
+ last==Public
+
+=item $chef->spawnArray($base_key);
+
+Creates an array of CHEF objects when the base key points to an array key.  
+
+ STARTING DATA
+
+ phone.(1).number==612.555.1212
+ phone.(8).number==651.555.1212
+
+ AFTER SPAWNARRAY (@array)=$chef->spawnArray("phone");
+
+ $array[1] would be Data::CHEF=HASH(0x806250c);
+ $array[8] would be Data::CHEF=HASH(0x804250c);
+
+=item (%hash)=$chef->spawnHash($base_key);
+
+Creates a hash table of CHEF objects when the base key points to a hash key
+
+ STARTING DATA
+
+ people.[tom].weight==200
+ people.[richard].weight==175
+ people.[mary].weight==110
+
+ AFTER SPAWNHASH (%hash)=$chef->spawnHash("people");
+
+ $hash{tom} would be Data::CHEF=HASH(0x806250c);
+ $hash{richard} would be DATA::CHEF=HASH(0x805250c);
+ $hash{mary} would be DATA::CHEF=HASH(0x803250c);
 
 =back
 
 =head1 AUTHOR
 
-Chris Josephes		chrisj@mr.net
+Chris Josephes		E<lt>chrisj@mr.netE<gt>
 
-=head1 VERSION
+=head1 COPYRIGHT
 
-Version 0.99
+Copyright 2002, Chris Josephes.  All rights reserved.
+This module is free software.  It may be used, redistributed, 
+and/or modified under the same terms as Perl itself.
